@@ -49,7 +49,10 @@
 
   /* TAB BAR */
   .tab-bar{background:var(--carbon);border-bottom:1px solid var(--border);display:flex;align-items:stretch;padding:0 18px;gap:1px;overflow-x:auto}
-  .tab-bar::-webkit-scrollbar{height:0}
+  .tab-bar::-webkit-scrollbar{height:6px}
+  .tab-bar::-webkit-scrollbar-track{background:var(--dark)}
+  .tab-bar::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+  .tab-bar::-webkit-scrollbar-thumb:hover{background:var(--muted)}
   .tab{font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:12px;letter-spacing:1px;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--muted);border-bottom:3px solid transparent;transition:all .15s;display:flex;align-items:center;gap:6px;white-space:nowrap;background:none;border-top:none;border-left:none;border-right:none;position:relative}
   .tab:hover{color:var(--text)}
   .tab.active{color:var(--text)}
@@ -119,8 +122,10 @@
 
   /* BOARD */
   .board{flex:1;overflow-x:auto;overflow-y:auto;padding:12px;display:flex;gap:10px;align-items:flex-start}
-  .board::-webkit-scrollbar{height:5px;width:5px}
-  .board::-webkit-scrollbar-thumb{background:var(--border2)}
+  .board::-webkit-scrollbar{height:8px;width:6px}
+  .board::-webkit-scrollbar-track{background:var(--dark)}
+  .board::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+  .board::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 
   
   .sub-crew-add{padding:4px 8px;text-align:center;font-size:10px;color:var(--dim);cursor:pointer;border-top:1px dashed var(--border2);margin-top:2px}
@@ -2327,15 +2332,23 @@ function makeCard(w) {
     return '<span class="' + cls + '" title="' + t.course + (t.startDate ? ' · ' + t.startDate : '') + '" onclick="event.stopPropagation();openTrainingModal(\'' + w.id + '\')">' + _tShort(t.course) + '</span>';
   }).join('');
 
-  // Check if worker is on vacation today
-  const onVacToday = (state.vacations || []).some(v => {
-    if (v.workerId !== w.id) return false;
+  // Check if worker is on vacation today or starting within 7 days
+  const sevenDaysOut = new Date(today); sevenDaysOut.setDate(sevenDaysOut.getDate() + 7);
+  let vacStatus = 'none'; // 'none' | 'soon' | 'now'
+  (state.vacations || []).forEach(v => {
+    if (v.workerId !== w.id) return;
     const s = new Date(v.start + 'T00:00:00');
     const e = new Date(v.end   + 'T00:00:00');
-    return today >= s && today <= e;
+    if (today >= s && today <= e) { vacStatus = 'now'; }
+    else if (vacStatus !== 'now' && s > today && s <= sevenDaysOut) { vacStatus = 'soon'; }
   });
-  const nameStyle = onVacToday ? ' style="color:#ef4444"' : '';
-  const vacBadge  = onVacToday ? '<span style="font-size:8px;background:#ef444422;color:#ef4444;border:1px solid #ef444455;padding:0 4px;margin-left:4px;font-family:\'Barlow Condensed\',sans-serif;letter-spacing:.5px">OFF</span>' : '';
+  const onVacToday = vacStatus === 'now';
+  const nameStyle = vacStatus === 'now'  ? ' style="color:#ef4444;font-weight:700"'
+                  : vacStatus === 'soon' ? ' style="color:#facc15;font-weight:700"'
+                  : '';
+  const vacBadge  = vacStatus === 'now'  ? '<span style="font-size:8px;background:#ef444422;color:#ef4444;border:1px solid #ef444455;padding:0 4px;margin-left:4px;font-family:\'Barlow Condensed\',sans-serif;letter-spacing:.5px">OFF</span>'
+                  : vacStatus === 'soon' ? '<span style="font-size:8px;background:#facc1522;color:#facc15;border:1px solid #facc1555;padding:0 4px;margin-left:4px;font-family:\'Barlow Condensed\',sans-serif;letter-spacing:.5px">VAC↑</span>'
+                  : '';
 
   div.innerHTML =
     '<div class="card-actions">' +
@@ -12928,6 +12941,26 @@ function vacGoToday() {
   renderVacation();
 }
 
+// ─── WORKER VACATION BAR COLOR ───────────────────────────────────────────────
+// Foreman/Supervisor/Manager/Superintendent roles → red
+// All others → deterministic distinct color from palette keyed by worker id
+const FOREMAN_ROLES = ['Foreman','Supervisor','Manager','Superintendent','Project Coordinator','Project Manager'];
+const VAC_WORKER_PALETTE = [
+  '#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b',
+  '#ec4899','#6366f1','#14b8a6','#84cc16','#f97316',
+  '#a78bfa','#34d399','#60a5fa','#fb923c','#4ade80',
+  '#e879f9','#38bdf8','#fbbf24','#818cf8','#2dd4bf'
+];
+function workerVacColor(w) {
+  if (!w) return '#6b7280';
+  const role = (w.role || '').trim();
+  if (FOREMAN_ROLES.some(r => role.toLowerCase().includes(r.toLowerCase()))) return '#ef4444';
+  // Hash worker id to palette index
+  let h = 0;
+  for (let i = 0; i < w.id.length; i++) h = (h * 31 + w.id.charCodeAt(i)) >>> 0;
+  return VAC_WORKER_PALETTE[h % VAC_WORKER_PALETTE.length];
+}
+
 function renderVacation() {
   const divFilter = document.getElementById('vacDivFilter')?.value || '';
   document.getElementById('vacMonthLabel').textContent =
@@ -12984,15 +13017,13 @@ function renderVacation() {
     const bgColor     = isWeekend ? 'var(--carbon)' : 'var(--panel)';
     html += `<div style="min-height:80px;background:${bgColor};border:1px solid ${borderColor};padding:4px;cursor:pointer;position:relative" onclick="openVacModalDate('${_vacYear}-${String(_vacMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}')">`;
     html += `<div style="font-size:12px;font-weight:700;color:${isToday?'var(--orange)':'var(--text)'};margin-bottom:3px">${d}</div>`;
-    cellVacs.slice(0,3).forEach(v => {
+    cellVacs.forEach(v => {
       const cfg = VAC_TYPES[v.type] || VAC_TYPES.other;
       const w   = state.workers.find(x => x.id === v.workerId);
       const name = w ? w.name.split(',')[0] : '?';
-      html += `<div onclick="event.stopPropagation();editVacEntry('${v.id}')" style="background:${cfg.color};color:#fff;font-size:9px;padding:1px 4px;margin-bottom:1px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${w?w.name:''}: ${cfg.label}">${cfg.emoji} ${name}</div>`;
+      const barColor = workerVacColor(w);
+      html += `<div onclick="event.stopPropagation();editVacEntry('${v.id}')" style="background:${barColor};color:#fff;font-size:9px;padding:1px 4px;margin-bottom:1px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${w?w.name:''}: ${cfg.label}">${cfg.emoji} ${name}</div>`;
     });
-    if (cellVacs.length > 3) {
-      html += `<div style="font-size:9px;color:var(--muted)">+${cellVacs.length-3} more</div>`;
-    }
     html += `</div>`;
   }
   html += `</div>`;
@@ -13019,10 +13050,19 @@ function renderVacation() {
       const cfg = VAC_TYPES[v.type] || VAC_TYPES.other;
       const w   = state.workers.find(x => x.id === v.workerId);
       const div = w ? (TAB_CONFIG[w.tab]?.label || w.tab) : '?';
+      const barColor = workerVacColor(w);
+      // Name color: red if on vacation now, yellow if starting within 7 days
+      const vStart = new Date(v.start + 'T00:00:00');
+      const vEnd   = new Date(v.end   + 'T00:00:00');
+      const todayL = new Date(); todayL.setHours(0,0,0,0);
+      const sevenL = new Date(todayL); sevenL.setDate(sevenL.getDate() + 7);
+      const nameColor = (todayL >= vStart && todayL <= vEnd) ? '#ef4444'
+                      : (vStart > todayL && vStart <= sevenL) ? '#facc15'
+                      : 'var(--text)';
       listHtml += `
-        <div onclick="editVacEntry('${v.id}')" style="display:flex;align-items:center;gap:10px;background:var(--panel);border-left:3px solid ${cfg.color};padding:6px 10px;cursor:pointer;font-family:'Barlow Condensed',sans-serif">
+        <div onclick="editVacEntry('${v.id}')" style="display:flex;align-items:center;gap:10px;background:var(--panel);border-left:3px solid ${barColor};padding:6px 10px;cursor:pointer;font-family:'Barlow Condensed',sans-serif">
           <span style="font-size:14px">${cfg.emoji}</span>
-          <span style="font-weight:700;font-size:13px;flex:1">${w ? w.name : 'Unknown'}</span>
+          <span style="font-weight:700;font-size:13px;flex:1;color:${nameColor}">${w ? w.name : 'Unknown'}</span>
           <span style="font-size:11px;color:var(--muted)">${div}</span>
           <span style="font-size:11px;color:var(--text)">${v.start} → ${v.end}</span>
           <span style="font-size:10px;color:${cfg.color};background:${cfg.color}22;padding:1px 6px">${cfg.label}</span>
