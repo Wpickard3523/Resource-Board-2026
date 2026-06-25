@@ -1153,14 +1153,29 @@ async function pinSubmit() {
           <option value="">— Select Worker —</option>
         </select>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div>
-          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px">Start Date</label>
-          <input type="date" id="vacStart" style="width:100%;background:var(--panel2);border:1px solid var(--border2);color:var(--text);padding:6px 8px;font-size:12px;box-sizing:border-box">
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Date Range</label>
+          <span id="vacDateHint" style="font-size:10px;color:var(--orange);font-family:'Barlow Condensed',sans-serif;letter-spacing:.3px">Click start date</span>
         </div>
-        <div>
-          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px">End Date</label>
-          <input type="date" id="vacEnd" style="width:100%;background:var(--panel2);border:1px solid var(--border2);color:var(--text);padding:6px 8px;font-size:12px;box-sizing:border-box">
+        <!-- Hidden real inputs still used by saveVacEntry -->
+        <input type="hidden" id="vacStart">
+        <input type="hidden" id="vacEnd">
+        <!-- Selected range display -->
+        <div id="vacRangeDisplay" style="display:flex;gap:8px;margin-bottom:8px;font-family:'Barlow Condensed',sans-serif;font-size:12px">
+          <span id="vacRangeStart" style="flex:1;background:var(--panel2);border:1px solid var(--border2);padding:5px 8px;color:var(--dim)">Start —</span>
+          <span style="color:var(--dim);line-height:28px">→</span>
+          <span id="vacRangeEnd" style="flex:1;background:var(--panel2);border:1px solid var(--border2);padding:5px 8px;color:var(--dim)">End —</span>
+          <button onclick="clearVacDates()" title="Clear dates" style="background:none;border:1px solid var(--border2);color:var(--dim);cursor:pointer;padding:4px 7px;font-size:10px">✕</button>
+        </div>
+        <!-- Inline calendar -->
+        <div id="vacCalPicker" style="background:var(--panel2);border:1px solid var(--border2);padding:8px;user-select:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <button onclick="vacPickNav(-1)" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px">◀</button>
+            <span id="vacPickLabel" style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:13px;letter-spacing:1px;color:var(--text)"></span>
+            <button onclick="vacPickNav(1)" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px">▶</button>
+          </div>
+          <div id="vacPickGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-family:'Barlow Condensed',sans-serif;font-size:11px"></div>
         </div>
       </div>
       <div>
@@ -13074,9 +13089,101 @@ function renderVacation() {
   document.getElementById('vacList').innerHTML = listHtml;
 }
 
+// ─── VAC DATE PICKER ─────────────────────────────────────────────────────────
+let _vpYear, _vpMonth;
+
+function _vpToStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function _vpFromStr(s) { return s ? new Date(s + 'T00:00:00') : null; }
+
+function renderVacPicker() {
+  const start = _vpFromStr(document.getElementById('vacStart').value);
+  const end   = _vpFromStr(document.getElementById('vacEnd').value);
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const firstDay = new Date(_vpYear, _vpMonth, 1);
+  const lastDay  = new Date(_vpYear, _vpMonth+1, 0);
+  document.getElementById('vacPickLabel').textContent =
+    firstDay.toLocaleString('default',{month:'long',year:'numeric'}).toUpperCase();
+
+  const dow = firstDay.getDay();
+  let html = '';
+  ['Su','Mo','Tu','We','Th','Fr','Sa'].forEach(d => {
+    html += `<div style="text-align:center;font-size:9px;color:var(--dim);padding:2px 0">${d}</div>`;
+  });
+  for (let i = 0; i < dow; i++) html += '<div></div>';
+  for (let d = 1; d <= lastDay.getDate(); d++) {
+    const cur  = new Date(_vpYear, _vpMonth, d);
+    const str  = _vpToStr(cur);
+    const isTod = cur.getTime() === today.getTime();
+    const isStart = start && str === _vpToStr(start);
+    const isEnd   = end   && str === _vpToStr(end);
+    const inRange = start && end && cur > start && cur < end;
+
+    let bg = 'transparent', color = 'var(--text)', border = '1px solid transparent', fw = '400';
+    if (isStart || isEnd) { bg = 'var(--orange)'; color = '#000'; fw = '700'; border = '1px solid var(--orange)'; }
+    else if (inRange)     { bg = 'rgba(251,146,60,.25)'; border = '1px solid rgba(251,146,60,.35)'; }
+    else if (isTod)       { border = '1px solid var(--orange)'; color = 'var(--orange)'; }
+
+    html += `<div onclick="vacPickDay('${str}')" style="text-align:center;padding:4px 2px;cursor:pointer;background:${bg};color:${color};border:${border};font-weight:${fw};border-radius:2px" onmouseenter="this.style.opacity='.75'" onmouseleave="this.style.opacity='1'">${d}</div>`;
+  }
+  document.getElementById('vacPickGrid').innerHTML = html;
+
+  // Update range display
+  const hint = !start ? 'Click start date' : !end ? 'Click end date' : '✓ Range set';
+  const hintColor = (!start || !end) ? 'var(--orange)' : '#4ade80';
+  document.getElementById('vacDateHint').textContent = hint;
+  document.getElementById('vacDateHint').style.color = hintColor;
+  document.getElementById('vacRangeStart').textContent = start ? _vpToStr(start) : 'Start —';
+  document.getElementById('vacRangeStart').style.color = start ? 'var(--text)' : 'var(--dim)';
+  document.getElementById('vacRangeEnd').textContent   = end   ? _vpToStr(end)   : 'End —';
+  document.getElementById('vacRangeEnd').style.color   = end   ? 'var(--text)' : 'var(--dim)';
+}
+
+function vacPickDay(str) {
+  const start = document.getElementById('vacStart').value;
+  const end   = document.getElementById('vacEnd').value;
+  if (!start || (start && end)) {
+    // First click — set start, clear end
+    document.getElementById('vacStart').value = str;
+    document.getElementById('vacEnd').value   = '';
+  } else {
+    // Second click — set end (swap if before start)
+    if (str < start) {
+      document.getElementById('vacEnd').value   = start;
+      document.getElementById('vacStart').value = str;
+    } else {
+      document.getElementById('vacEnd').value = str;
+    }
+  }
+  renderVacPicker();
+}
+
+function vacPickNav(dir) {
+  _vpMonth += dir;
+  if (_vpMonth > 11) { _vpMonth = 0; _vpYear++; }
+  if (_vpMonth < 0)  { _vpMonth = 11; _vpYear--; }
+  renderVacPicker();
+}
+
+function clearVacDates() {
+  document.getElementById('vacStart').value = '';
+  document.getElementById('vacEnd').value   = '';
+  renderVacPicker();
+}
+
+function _initVacPicker(startVal, endVal) {
+  const ref = startVal ? new Date(startVal + 'T00:00:00') : new Date();
+  _vpYear  = ref.getFullYear();
+  _vpMonth = ref.getMonth();
+  document.getElementById('vacStart').value = startVal || '';
+  document.getElementById('vacEnd').value   = endVal   || '';
+  renderVacPicker();
+}
+
 function openVacModal() {
   _vacEditId = null;
-  // Populate worker select
   const sel = document.getElementById('vacWorkerSel');
   sel.innerHTML = '<option value="">— Select Worker —</option>';
   const sorted = [...state.workers].sort((a,b) => a.name.localeCompare(b.name));
@@ -13085,18 +13192,16 @@ function openVacModal() {
     sel.innerHTML += `<option value="${w.id}">${w.name} (${div})</option>`;
   });
   document.getElementById('vacModalTitle').textContent = 'Add Vacation / Leave';
-  document.getElementById('vacStart').value = '';
-  document.getElementById('vacEnd').value   = '';
   document.getElementById('vacType').value  = 'vacation';
   document.getElementById('vacNote').value  = '';
   document.getElementById('vacDelBtn').style.display = 'none';
+  _initVacPicker('', '');
   document.getElementById('vacModal').classList.add('open');
 }
 
 function openVacModalDate(dateStr) {
   openVacModal();
-  document.getElementById('vacStart').value = dateStr;
-  document.getElementById('vacEnd').value   = dateStr;
+  _initVacPicker(dateStr, dateStr);
 }
 
 function editVacEntry(id) {
@@ -13105,12 +13210,11 @@ function editVacEntry(id) {
   _vacEditId = id;
   openVacModal();
   document.getElementById('vacWorkerSel').value = v.workerId;
-  document.getElementById('vacStart').value     = v.start;
-  document.getElementById('vacEnd').value       = v.end;
   document.getElementById('vacType').value      = v.type;
   document.getElementById('vacNote').value      = v.note || '';
   document.getElementById('vacModalTitle').textContent = 'Edit Entry';
   document.getElementById('vacDelBtn').style.display = 'inline-block';
+  _initVacPicker(v.start, v.end);
 }
 
 function closeVacModal() {
