@@ -2990,9 +2990,9 @@ async function saveBoard() {
     crews:    state.crews,
     workers:  state.workers,
     students: state.students || [],
-    jobAssignments: state.assignments || {},
-    jobStatuses:    state.statuses    || {},
-    clientProjects: state.clientProjects || [],
+    jobAssignments: state.assignments || loadJobAssignments(),
+    jobStatuses:    state.statuses    || loadJobStatuses(),
+    clientProjects: CLIENT_PROJECTS || [],
     fortisProjects: state.fortisProjects || [],
     vacations:      state.vacations || [],
   };
@@ -3056,7 +3056,12 @@ function applySnapshot(snap) {
   state.students       = snap.students || [];
   state.assignments    = snap.jobAssignments || {};
   state.statuses       = snap.jobStatuses    || {};
-  if (snap.clientProjects) state.clientProjects = snap.clientProjects;
+  try { localStorage.setItem('vrd_job_assignments', JSON.stringify(state.assignments)); } catch(e) {}
+  try { localStorage.setItem('vrd_job_statuses',    JSON.stringify(state.statuses));    } catch(e) {}
+  if (snap.clientProjects && Array.isArray(snap.clientProjects)) {
+    CLIENT_PROJECTS.length = 0;
+    snap.clientProjects.forEach(p => CLIENT_PROJECTS.push(p));
+  }
   if (snap.fortisProjects) state.fortisProjects = snap.fortisProjects;
   if (snap.vacations)      state.vacations      = snap.vacations;
   renderActive();
