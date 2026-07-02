@@ -2995,6 +2995,7 @@ async function saveBoard() {
     clientProjects: CLIENT_PROJECTS || [],
     fortisProjects: state.fortisProjects || [],
     vacations:      state.vacations || [],
+    training:       state.training || {},
   };
 
   try {
@@ -3064,6 +3065,7 @@ function applySnapshot(snap) {
   }
   if (snap.fortisProjects) state.fortisProjects = snap.fortisProjects;
   if (snap.vacations)      state.vacations      = snap.vacations;
+  if (snap.training)       state.training       = snap.training;
   renderActive();
   updateStats();
 }
