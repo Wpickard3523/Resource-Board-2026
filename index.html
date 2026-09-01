@@ -390,6 +390,10 @@
   .legend{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .legend-item{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--dim)}
   .legend-pip{width:3px;height:11px;border-radius:1px}
+  .presence-bar{display:flex;gap:5px;align-items:center;flex-wrap:wrap;padding-right:6px;border-right:1px solid var(--border2);margin-right:2px}
+  .presence-pill{display:flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--border2);border-radius:10px;padding:2px 8px 2px 4px;font-family:'Barlow Condensed',sans-serif;font-size:10px;color:var(--text);cursor:default}
+  .presence-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;flex-shrink:0}
+  .presence-avatar{width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#fff;flex-shrink:0}
 
   /* UTILIZATION BADGE */
   .util-badge{display:inline-flex;align-items:center;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:10px;letter-spacing:.3px;padding:1px 5px;border-radius:2px;border:1px solid;cursor:pointer;flex-shrink:0}
@@ -709,6 +713,7 @@ async function pinSubmit() {
     </div>
   </div>
   <div class="header-actions">
+    <div class="presence-bar" id="presenceBar" title="Who's viewing the board right now"></div>
     <div class="legend" id="legend-bar"></div>
     <button class="btn btn-ghost" onclick="exportCSV()" title="Export current tab to CSV">⬇ CSV</button>
     <button class="btn btn-ghost" onclick="exportPrint()" title="Print current tab">🖨 Print</button>
@@ -898,7 +903,7 @@ async function pinSubmit() {
     </div>
     <div class="form-row"><label>License Class</label><input type="text" id="wLicense" placeholder="e.g. Class 1, Class 3"></div>
     <div class="form-row"><label>Email</label><input type="email" id="wEmail" placeholder="e.g. jsmith@valard.com" autocomplete="off"></div>
-    <div class="form-row"><label>Phone</label><input type="tel" id="wPhone" placeholder="e.g. (780) 555-1234" autocomplete="off"></div>
+    <div class="form-row"><label>Phone</label><input type="tel" id="wPhone" placeholder="e.g. (780) 555-1234" autocomplete="off" onblur="this.value=formatPhoneUS(this.value)"></div>
     <div class="form-row"><label>Assign to Crew</label><select id="wCrew"></select></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeWorkerModal()">Cancel</button>
@@ -1132,6 +1137,14 @@ async function pinSubmit() {
     </div>
     <!-- Summary strip -->
     <div id="vacSummary" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"></div>
+    <!-- Color legend -->
+    <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap;font-family:'Barlow Condensed',sans-serif;font-size:10px;color:var(--muted)">
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:#dc2626;border-radius:2px"></span>Supervisors / Managers</span>
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:#2563eb;border-radius:2px"></span>Foreman</span>
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:#16a34a;border-radius:2px"></span>AB / SK / Turks Powerline</span>
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:#d97706;border-radius:2px"></span>Hydrovac / Traffic / Drilling / Tools / Safety / Mechanics / Subdivisions</span>
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:10px;background:#6b7280;border-radius:2px"></span>Admin</span>
+    </div>
     <!-- Calendar grid -->
     <div id="vacCalGrid"></div>
     <!-- List view below -->
@@ -1469,13 +1482,19 @@ const UNDO_LIMIT = 20;
 let undoStack   = [];
 let cjUndoStack = [];
 
+// ─── UNSAVED-CHANGES TRACKING ───────────────────────────────────────────────
+let _dirty = false;
+function markDirty() { _dirty = true; }
+
 function snapshotState() {
+  markDirty();
   undoStack.push(JSON.stringify({ crews: state.crews, workers: state.workers, students: state.students || [], training: state.training || {} }));
   if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   updateUndoBtn();
 }
 
 function cjSnapshot() {
+  markDirty();
   cjUndoStack.push(JSON.stringify({
     projects:    CLIENT_PROJECTS.map(p => Object.assign({}, p)),
     clients:     JSON.parse(JSON.stringify(CLIENTS)),
@@ -1537,6 +1556,7 @@ function seedData() {
 // ─── TAB SWITCH ────────────────────────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
+  if (typeof pushPresence === 'function') pushPresence(); // keep "viewing X" presence tooltip current
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   updateUndoBtn();
   const gridTabs     = [];  // no pure-grid tabs remain by default
@@ -2326,10 +2346,16 @@ function makeCard(w) {
   const div = document.createElement('div');
   div.className = 'worker-card'; div.dataset.workerId = w.id; div.dataset.role = w.role; div.draggable = true;
 
-  // Build training pills
+  // Build training pills — hide entries whose training has already ended
+  // (data stays in state.training, so the Gantt/matrix views still show history)
   const entries = (state.training[w.id] || []);
   const today = new Date(); today.setHours(0,0,0,0);
-  const pillsHtml = entries.map(t => {
+  const activeEntries = entries.filter(t => {
+    const relevantDate = t.endDate || t.startDate;
+    if (!relevantDate) return true;
+    return new Date(relevantDate + 'T00:00:00') >= today;
+  });
+  const pillsHtml = activeEntries.map(t => {
     const end = t.endDate ? new Date(t.endDate + 'T00:00:00') : null;
     const upcoming = t.startDate ? new Date(t.startDate + 'T00:00:00') > today : false;
     const cls = 'training-pill ttype-' + (t.type||'other') + (upcoming ? ' ttype-upcoming' : '');
@@ -2394,7 +2420,10 @@ function updateStats() {
   const crews    = hasSup ? state.crews.filter(c => c.tab === tab && c.type === 'sup')
                           : state.crews.filter(c => c.tab === tab);
   const workers  = isSchool ? (state.students||[]) : state.workers.filter(w => w.tab === tab);
-  const unassigned = (isGrid||isSchool) ? 0 : workers.filter(w => !w.crewId).length;
+  // A worker sitting in a supervisor slot (state.crews[].workerId) has no crewId
+  // but is not actually unassigned — exclude them the same way the pool does.
+  const _supWorkerIds = new Set(state.crews.filter(c => c.workerId).map(c => c.workerId));
+  const unassigned = (isGrid||isSchool) ? 0 : workers.filter(w => !w.crewId && !_supWorkerIds.has(w.id)).length;
   document.getElementById('stat-crews').textContent     = isGrid ? '—' : crews.length;
   document.getElementById('stat-workers').textContent   = workers.length;
   document.getElementById('stat-unassigned').textContent = unassigned;
@@ -2691,19 +2720,29 @@ function populateCrewSelect(selectedId) {
   });
 }
 function closeWorkerModal() { document.getElementById('workerModal').classList.remove('open'); }
+
+// Normalizes any phone input to (XXX) XXX-XXXX. Used both for manual entry
+// (Add/Edit Worker form) and the HBU import (area code + phone number columns).
+function formatPhoneUS(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length === 10) return '(' + digits.slice(0,3) + ') ' + digits.slice(3,6) + '-' + digits.slice(6);
+  if (digits.length === 11 && digits[0] === '1') return formatPhoneUS(digits.slice(1));
+  return String(raw || '').trim(); // partial/international/empty — leave as typed rather than mangle it
+}
+
 function saveWorker() {
   snapshotState();
   const name = document.getElementById('wName').value.trim(); if (!name) return;
   const tab    = document.getElementById('wTab').value;
   const crewId = document.getElementById('wCrew').value || null;
   const empNum = document.getElementById('wEmpNum').value.trim();
+  const phone  = formatPhoneUS(document.getElementById('wPhone').value.trim());
   if (editWorkerId) {
     const w = state.workers.find(x => x.id === editWorkerId);
     Object.assign(w, {name, empNum, role:document.getElementById('wRole').value,
       license:document.getElementById('wLicense').value.trim(),
       email:document.getElementById('wEmail').value.trim(),
-      phone:document.getElementById('wPhone').value.trim(),
-      phone:document.getElementById('wPhone').value.trim(),
+      phone,
       jobTitle:document.getElementById('wJobTitle').value.trim(),
       tab, crewId});
   } else {
@@ -2711,6 +2750,7 @@ function saveWorker() {
       role:document.getElementById('wRole').value,
       license:document.getElementById('wLicense').value.trim(),
       email:document.getElementById('wEmail').value.trim(),
+      phone,
       jobTitle:document.getElementById('wJobTitle').value.trim()});
   }
   closeWorkerModal();
@@ -3006,6 +3046,7 @@ async function saveBoard() {
     });
     if (!r.ok) throw new Error(`Firebase PUT failed: ${r.status}`);
     _lastSavedAt = snapshot.savedAt;
+    _dirty = false;
     syncStatus('✓ Saved', '#22c55e');
     setTimeout(() => syncStatus('● Live', '#22c55e'), 3000);
   } catch(e) {
@@ -3066,6 +3107,7 @@ function applySnapshot(snap) {
   if (snap.fortisProjects) state.fortisProjects = snap.fortisProjects;
   if (snap.vacations)      state.vacations      = snap.vacations;
   if (snap.training)       state.training       = snap.training;
+  _dirty = false; // local view now mirrors the last saved snapshot, whether pulled manually or pushed live by someone else
   renderActive();
   updateStats();
 }
@@ -3141,6 +3183,110 @@ function startFirebaseLive() {
 // (deferred so PIN gate can complete first)
 setTimeout(startFirebaseLive, 500);
 
+// ─── PRESENCE — who's viewing the board right now ────────────────────────────
+// Firebase RTDB via REST has no built-in onDisconnect(), so presence here is a
+// heartbeat: each tab writes its own node every 15s, and anyone whose last
+// heartbeat is older than PRESENCE_STALE_MS is treated as gone. A best-effort
+// delete on pagehide makes closing a tab disappear immediately instead of
+// waiting out the staleness window.
+const PRESENCE_PATH      = '/presence.json';
+const PRESENCE_HEARTBEAT_MS = 15000;
+const PRESENCE_STALE_MS     = 45000; // ~3 missed heartbeats
+
+let _presenceId = sessionStorage.getItem('vrd_session_id');
+if (!_presenceId) {
+  _presenceId = 'p' + Date.now() + Math.random().toString(36).slice(2, 8);
+  sessionStorage.setItem('vrd_session_id', _presenceId);
+}
+let _presenceCache = {};   // id → { name, tab, ts }
+let _presenceEvtSource = null;
+
+function _presenceColor(name) {
+  const palette = ['#2a7aff','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#84cc16'];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+function _presenceInitials(name) {
+  const parts = name.trim().split(/[\s,]+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0].slice(0,2)).toUpperCase();
+}
+
+async function pushPresence() {
+  try {
+    await fetch(`${FB_URL}/presence/${_presenceId}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: _fbUser, tab: activeTab, ts: Date.now() })
+    });
+  } catch(e) { /* heartbeat is best-effort — a missed beat just ages this user out faster */ }
+}
+
+function renderPresence() {
+  const bar = document.getElementById('presenceBar');
+  if (!bar) return;
+  const now = Date.now();
+  const live = Object.entries(_presenceCache)
+    .filter(([id, p]) => p && now - p.ts < PRESENCE_STALE_MS)
+    .sort((a,b) => (a[1].name||'').localeCompare(b[1].name||''));
+
+  bar.innerHTML = live.map(([id, p]) => {
+    const isMe = id === _presenceId;
+    const tabLabel = TAB_CONFIG[p.tab]?.label || p.tab || '';
+    return '<span class="presence-pill" title="' + p.name + (tabLabel ? ' · viewing ' + tabLabel : '') + (isMe ? ' (you)' : '') + '">' +
+      '<span class="presence-avatar" style="background:' + _presenceColor(p.name||'?') + '">' + _presenceInitials(p.name||'?') + '</span>' +
+      (p.name || 'Unknown') + (isMe ? ' (you)' : '') +
+    '</span>';
+  }).join('');
+}
+
+function startPresenceLive() {
+  if (_presenceEvtSource) _presenceEvtSource.close();
+  _presenceEvtSource = new EventSource(`${FB_URL}${PRESENCE_PATH}`);
+
+  const applyEvent = e => {
+    try {
+      const payload = JSON.parse(e.data);
+      const path = payload.path || '/';
+      if (path === '/') {
+        _presenceCache = payload.data || {};
+      } else {
+        const id = path.replace(/^\//, '').split('/')[0];
+        if (payload.data == null) delete _presenceCache[id];
+        else _presenceCache[id] = payload.data;
+      }
+      renderPresence();
+    } catch(err) { /* silent */ }
+  };
+  _presenceEvtSource.addEventListener('put', applyEvent);
+  _presenceEvtSource.addEventListener('patch', applyEvent);
+  _presenceEvtSource.onerror = () => {
+    _presenceEvtSource.close();
+    setTimeout(startPresenceLive, 5000);
+  };
+}
+
+pushPresence();
+setInterval(pushPresence, PRESENCE_HEARTBEAT_MS);
+setInterval(renderPresence, 10000); // ages out anyone whose heartbeat stopped, even with no new SSE event
+setTimeout(startPresenceLive, 500);
+
+// Best-effort: disappear immediately on close/navigate instead of waiting out the staleness window
+window.addEventListener('pagehide', () => {
+  try {
+    fetch(`${FB_URL}/presence/${_presenceId}.json`, { method: 'DELETE', keepalive: true });
+  } catch(e) { /* nothing more we can do at this point */ }
+});
+
+// ─── ASK BEFORE LEAVING WITH UNSAVED CHANGES ─────────────────────────────────
+window.addEventListener('beforeunload', function(e) {
+  if (!_dirty) return;
+  e.preventDefault();
+  e.returnValue = ''; // browsers show their own generic message; custom text is ignored by modern browsers
+  return '';
+});
+
 // ─── EXPORT CSV ────────────────────────────────────────────────────────────
 function exportCSV() {
   const tab = activeTab;
@@ -3208,8 +3354,8 @@ function exportPrint() {
 
   let bodyHtml = '';
 
+  const supWorkerIds = new Set(state.crews.filter(c => c.workerId).map(c => c.workerId));
   if (isSchool) {
-    const students = (state.students || []);
     const sessions = state.crews.filter(c => c.tab === 'school');
     sessions.forEach(sess => {
       const sStudents = students.filter(s => s.sessionId === sess.id);
@@ -3268,7 +3414,7 @@ function exportPrint() {
         bodyHtml += '</tbody></table>';
       });
       // Unassigned
-      const unassigned = workers.filter(w => !w.crewId);
+      const unassigned = workers.filter(w => !w.crewId && !supWorkerIds.has(w.id));
       if (unassigned.length) {
         bodyHtml += `<h3 class="section-title unassigned-title">Unassigned (${unassigned.length})</h3>`;
         bodyHtml += `<table><thead><tr><th>Name</th><th>Role</th><th>Cert/Ticket</th><th>License</th></tr></thead><tbody>`;
@@ -3320,7 +3466,7 @@ function exportPrint() {
 <div class="print-stats">
   <span><span class="print-stat-val">${state.workers.filter(w=>w.tab===tab).length}</span> Workers</span>
   <span><span class="print-stat-val">${state.workers.filter(w=>w.tab===tab&&w.crewId).length}</span> Assigned</span>
-  <span><span class="print-stat-val">${state.workers.filter(w=>w.tab===tab&&!w.crewId).length}</span> Unassigned</span>
+  <span><span class="print-stat-val">${state.workers.filter(w=>w.tab===tab&&!w.crewId&&!supWorkerIds.has(w.id)).length}</span> Unassigned</span>
   <span><span class="print-stat-val">${state.crews.filter(c=>c.tab===tab&&c.type!=='sub').length}</span> Crews/Groups</span>
 </div>
 ${bodyHtml}
@@ -5132,9 +5278,13 @@ function processHBURows(rows) {
   // Detect column names flexibly
   const sample = rows[0];
   const keys = Object.keys(sample);
-  const empCol  = keys.find(k => /emp.*#|emp.*num|employee.*id/i.test(k)) || keys[0];
-  const nameCol = keys.find(k => /employee.*name|name/i.test(k)) || keys[1];
+  const empCol   = keys.find(k => /emp.*#|emp.*num|employee.*id/i.test(k)) || keys[0];
+  const nameCol  = keys.find(k => /employee.*name/i.test(k)) || keys.find(k => /^name$/i.test(k)) || keys.find(k => /name/i.test(k) && !/sup/i.test(k)) || keys[1];
   const titleCol = keys.find(k => /job.*title|title/i.test(k)) || keys[2];
+  const supCol   = keys.find(k => /supv|supervisor/i.test(k));
+  const areaCol  = keys.find(k => /area.*code/i.test(k));
+  const phoneCol = keys.find(k => /phone/i.test(k) && !/area/i.test(k));
+  const emailCol = keys.find(k => /email/i.test(k));
 
   let updated = 0, added = 0, skipped = 0;
   const results = [];
@@ -5144,6 +5294,11 @@ function processHBURows(rows) {
     const empNum    = empNumRaw.replace(/^e/i, ''); // strip leading 'e' if present
     const name      = String(row[nameCol] || '').trim();
     const jobTitle  = String(row[titleCol] || '').trim();
+    const supName   = supCol   ? String(row[supCol]   || '').trim() : '';
+    const areaCode  = areaCol  ? String(row[areaCol]  || '').trim() : '';
+    const phoneNum  = phoneCol ? String(row[phoneCol] || '').trim() : '';
+    const email     = emailCol ? String(row[emailCol] || '').trim() : '';
+    const phone     = formatPhoneUS(areaCode + phoneNum);
 
     if (!empNum || !name) { skipped++; return; }
 
@@ -5152,19 +5307,28 @@ function processHBURows(rows) {
     const existing = state.workers.find(w => w.id === id || w.empNum === empNum);
 
     if (existing) {
-      // Update name and job title only — preserve tab, crewId, license
+      // Update contact/identity fields — preserve tab, crewId, license, cert (board assignment stays put)
       const changes = [];
-      if (existing.name !== name)         { changes.push('name: ' + existing.name + ' → ' + name); existing.name = name; }
-      if (existing.jobTitle !== jobTitle) { changes.push('title: ' + existing.jobTitle + ' → ' + jobTitle); existing.jobTitle = jobTitle; }
-      if (existing.role !== role)         { changes.push('role: ' + existing.role + ' → ' + role); existing.role = role; }
+      if (existing.name !== name)          { changes.push('name: ' + existing.name + ' → ' + name); existing.name = name; }
+      if (existing.jobTitle !== jobTitle)  { changes.push('title: ' + existing.jobTitle + ' → ' + jobTitle); existing.jobTitle = jobTitle; }
+      if (existing.role !== role)          { changes.push('role: ' + existing.role + ' → ' + role); existing.role = role; }
+      if (phone && existing.phone !== phone) { changes.push('phone: ' + (existing.phone || '—') + ' → ' + phone); existing.phone = phone; }
+      if (email && existing.email !== email) { changes.push('email: ' + (existing.email || '—') + ' → ' + email); existing.email = email; }
       existing.empNum = empNum;
       existing.id     = id; // normalize id format
       if (changes.length) { updated++; results.push({ status: '✓ Updated', name, changes: changes.join(', ') }); }
     } else {
-      // New worker — add to unassigned pool, default tab based on context
-      state.workers.push({ id, empNum, name, tab: 'ab', crewId: null, role, jobTitle, license: '', cert: '' });
+      // New worker — inherit division from their supervisor if we can match one on the board;
+      // falls back to AB Powerline unassigned when the supervisor isn't found (e.g. off-board or higher mgmt).
+      let tab = 'ab';
+      let supMatch = '';
+      if (supName) {
+        const sup = state.workers.find(w => w.name.trim().toLowerCase() === supName.toLowerCase());
+        if (sup) { tab = sup.tab; supMatch = ' → ' + (TAB_CONFIG[tab]?.label || tab) + ' unassigned'; }
+      }
+      state.workers.push({ id, empNum, name, tab, crewId: null, role, jobTitle, license: '', cert: '', phone, email });
       added++;
-      results.push({ status: '+ Added', name, changes: jobTitle });
+      results.push({ status: '+ Added', name, changes: jobTitle + supMatch });
     }
   });
 
@@ -5197,7 +5361,7 @@ function showHBUResultModal(updated, added, skipped, results) {
         <span style="color:#60a5fa;font-weight:700;font-size:18px">${added}</span><span style="color:var(--muted)"> added &nbsp;</span>
         <span style="color:var(--dim);font-weight:700;font-size:18px">${skipped}</span><span style="color:var(--muted)"> skipped</span>
       </div>
-      ${added ? '<div style="font-size:11px;color:#f59e0b;font-family:\'Barlow Condensed\',sans-serif">⚠ New workers added to AB Powerline unassigned — reassign division and crew as needed.</div>' : ''}
+      ${added ? '<div style="font-size:11px;color:#f59e0b;font-family:\'Barlow Condensed\',sans-serif">⚠ New workers were dropped into their supervisor\'s unassigned pool where a supervisor match was found on the board (see Changes column) — otherwise defaulted to AB Powerline unassigned. Reassign crew as needed.</div>' : ''}
       <div style="overflow-y:auto;flex:1;border:1px solid var(--border)">
         <table style="width:100%;border-collapse:collapse;font-size:11px">
           <thead><tr style="background:var(--carbon)">
@@ -5996,11 +6160,11 @@ function renderTrainingOverview() {
   const totalYearHours = monthHours.reduce((a,b) => a+b, 0);
 
   // Month divider header
-  let ganttHdr = '<div style="display:flex;margin-left:' + GANTT_LBL + 'px;border-bottom:1px solid var(--border2)">';
+  let ganttHdr = '<div style="display:flex;margin-left:' + GANTT_LBL + 'px;min-width:' + GANTT_W + 'px;border-bottom:1px solid var(--border2)">';
   MONTHS.forEach((m, mi) => {
     const dInM = new Date(tovYear, mi+1, 0).getDate();
-    const w = (dInM / yearDays * GANTT_W).toFixed(1);
-    ganttHdr += '<div style="width:' + w + 'px;min-width:' + w + 'px;font-family:\'Barlow Condensed\',sans-serif;font-size:9px;color:var(--muted);text-align:center;padding:2px 0;border-right:1px solid var(--border);box-sizing:border-box">' + m + '</div>';
+    const wPct = (dInM / yearDays * 100).toFixed(2);
+    ganttHdr += '<div style="width:' + wPct + '%;font-family:\'Barlow Condensed\',sans-serif;font-size:9px;color:var(--muted);text-align:center;padding:2px 0;border-right:1px solid var(--border);box-sizing:border-box">' + m + '</div>';
   });
   ganttHdr += '</div>';
 
@@ -6047,7 +6211,7 @@ function renderTrainingOverview() {
           '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:11px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + w.name + '</div>' +
           '<div style="font-size:9px;color:var(--dim);font-family:\'Barlow Condensed\',sans-serif">' + (w.jobTitle||w.role||'') + '</div>' +
         '</div>' +
-        '<div style="flex:1;position:relative;height:22px;width:' + GANTT_W + 'px">' +
+        '<div style="flex:1 1 auto;position:relative;height:22px;min-width:' + GANTT_W + 'px">' +
           gridLines + bars +
         '</div>' +
       '</div>';
@@ -6058,13 +6222,13 @@ function renderTrainingOverview() {
     '<div style="width:' + GANTT_LBL + 'px;min-width:' + GANTT_LBL + 'px;padding:5px 8px;font-family:\'Barlow Condensed\',sans-serif;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;box-sizing:border-box">' +
       'Total hrs' +
     '</div>' +
-    '<div style="flex:1;display:flex;width:' + GANTT_W + 'px">';
+    '<div style="flex:1 1 auto;display:flex;min-width:' + GANTT_W + 'px">';
 
   MONTHS.forEach((m, mi) => {
     const dInM = new Date(tovYear, mi+1, 0).getDate();
-    const w    = (dInM / yearDays * GANTT_W).toFixed(1);
+    const wPct = (dInM / yearDays * 100).toFixed(2);
     const hrs  = monthHours[mi];
-    totalsRow += '<div style="width:' + w + 'px;min-width:' + w + 'px;text-align:center;font-family:\'Barlow Condensed\',sans-serif;font-size:13px;font-weight:700;color:' + (hrs > 0 ? '#4ade80' : 'var(--border2)') + ';border-right:1px solid var(--border);padding:5px 0;box-sizing:border-box" title="' + m + ': ' + hrs + 'h">' +
+    totalsRow += '<div style="width:' + wPct + '%;text-align:center;font-family:\'Barlow Condensed\',sans-serif;font-size:13px;font-weight:700;color:' + (hrs > 0 ? '#4ade80' : 'var(--border2)') + ';border-right:1px solid var(--border);padding:5px 0;box-sizing:border-box" title="' + m + ': ' + hrs + 'h">' +
       (hrs > 0 ? hrs + 'h' : '—') +
     '</div>';
   });
@@ -7088,23 +7252,23 @@ function vacGoToday() {
 }
 
 // ─── WORKER VACATION BAR COLOR ───────────────────────────────────────────────
-// Foreman/Supervisor/Manager/Superintendent roles → red
-// All others → deterministic distinct color from palette keyed by worker id
-const FOREMAN_ROLES = ['Foreman','Supervisor','Manager','Superintendent','Project Coordinator','Project Manager'];
-const VAC_WORKER_PALETTE = [
-  '#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b',
-  '#ec4899','#6366f1','#14b8a6','#84cc16','#f97316',
-  '#a78bfa','#34d399','#60a5fa','#fb923c','#4ade80',
-  '#e879f9','#38bdf8','#fbbf24','#818cf8','#2dd4bf'
-];
+// Title overrides division (a supervisor in Hydrovac is still red, not yellow):
+//   Supervisor/Manager/Superintendent/Director → red
+//   Foreman/Foreperson                          → blue
+//   AB / SK / Turks powerline (everyone else)   → green
+//   Hydrovac/Traffic/Drilling/Tools/Safety/Mechanics/Subdivisions → yellow
+//   Admin                                       → grey
+const VAC_GREEN_TABS  = ['ab','sask','turks'];
+const VAC_YELLOW_TABS = ['hydrovac','tc','drilling','tools','safety','mech','sub'];
 function workerVacColor(w) {
   if (!w) return '#6b7280';
-  const role = (w.role || '').trim();
-  if (FOREMAN_ROLES.some(r => role.toLowerCase().includes(r.toLowerCase()))) return '#ef4444';
-  // Hash worker id to palette index
-  let h = 0;
-  for (let i = 0; i < w.id.length; i++) h = (h * 31 + w.id.charCodeAt(i)) >>> 0;
-  return VAC_WORKER_PALETTE[h % VAC_WORKER_PALETTE.length];
+  const title = ((w.jobTitle || '') + ' ' + (w.role || '')).toLowerCase();
+  if (/supervisor|superintendent|manager|director/.test(title)) return '#dc2626'; // red
+  if (/foreman|foreperson/.test(title))                          return '#2563eb'; // blue
+  if (VAC_GREEN_TABS.includes(w.tab))                            return '#16a34a'; // green
+  if (VAC_YELLOW_TABS.includes(w.tab))                           return '#d97706'; // yellow
+  if (w.tab === 'admin')                                         return '#6b7280'; // grey
+  return '#6b7280'; // any other/unlisted division
 }
 
 function renderVacation() {
@@ -7338,8 +7502,8 @@ function openVacModalDate(dateStr) {
 function editVacEntry(id) {
   const v = (state.vacations || []).find(x => x.id === id);
   if (!v) return;
-  _vacEditId = id;
   openVacModal();
+  _vacEditId = id;
   document.getElementById('vacWorkerSel').value = v.workerId;
   document.getElementById('vacType').value      = v.type;
   document.getElementById('vacNote').value      = v.note || '';
@@ -7361,6 +7525,7 @@ function saveVacEntry() {
   const note     = document.getElementById('vacNote').value.trim();
   if (!workerId || !start || !end) { alert('Worker, start date, and end date are required.'); return; }
   if (end < start) { alert('End date must be on or after start date.'); return; }
+  markDirty();
   if (!state.vacations) state.vacations = [];
   if (_vacEditId) {
     const idx = state.vacations.findIndex(v => v.id === _vacEditId);
@@ -7375,6 +7540,7 @@ function saveVacEntry() {
 function deleteVacEntry() {
   if (!_vacEditId) return;
   if (!confirm('Delete this entry?')) return;
+  markDirty();
   state.vacations = (state.vacations || []).filter(v => v.id !== _vacEditId);
   closeVacModal();
   renderVacation();
