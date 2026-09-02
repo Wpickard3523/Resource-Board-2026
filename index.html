@@ -1666,6 +1666,16 @@ function sortByRole(arr) {
 }
 
 // ─── RENDER ────────────────────────────────────────────────────────────────
+// Fully detaches a worker from wherever they currently sit — a regular crew
+// (w.crewId) or a supervisor slot (crews[].workerId) — before a drop applies
+// their new placement. Every worker-drop handler calls this first, so a
+// worker is never mutated except as part of one atomic "move" that a
+// successful drop's renderActive() immediately reflects everywhere.
+function detachWorkerFromCurrentSlot(workerId) {
+  const w = state.workers.find(x => x.id === workerId);
+  if (w) w.crewId = null;
+  state.crews.forEach(c => { if (c.workerId === workerId) c.workerId = null; });
+}
 function renderActive() {
   if (TAB_CONFIG[activeTab]?.layout === 'grid') { renderGrid(); return; }
 
@@ -1795,20 +1805,10 @@ function renderActive() {
     const supWorker = sup.workerId ? state.workers.find(w => w.id === sup.workerId) : null;
     if (supWorker) {
       const card = makeCard(supWorker);
-      // Enable drag so supervisor card can be dragged like a worker card
-      card.draggable = true;
+      // Card is draggable like any other worker card via makeCard's own
+      // dragstart/dragend — no state mutation happens until a valid drop.
       card.style.pointerEvents = 'all';
       card.style.cursor = 'grab';
-      card.addEventListener('dragstart', e => {
-        e.stopPropagation();
-        dragCrewId = null; dragSubCrewId = null;
-        dragWorkerId = supWorker.id;
-        // Remove from sup slot on drag start
-        snapshotState();
-        sup.workerId = null;
-        card.classList.add('dragging');
-      });
-      card.addEventListener('dragend', () => { dragWorkerId = null; card.classList.remove('dragging'); });
       // Hide built-in card-actions so our slot buttons are the controls
       const builtInActions = card.querySelector('.card-actions');
       if (builtInActions) builtInActions.style.display = 'none';
@@ -1886,11 +1886,9 @@ function renderActive() {
       slotDiv.classList.remove('drag-over');
       if (!dragWorkerId) return;
       snapshotState();
-      // Clear the worker from any existing crew so they don't duplicate
+      detachWorkerFromCurrentSlot(dragWorkerId);
       const w = state.workers.find(x => x.id === dragWorkerId);
-      if (w) { w.crewId = null; w.tab = activeTab; }
-      // Also clear any other sup slot that had this worker
-      state.crews.forEach(c => { if (c.workerId === dragWorkerId && c.id !== sup.id) c.workerId = null; });
+      if (w) w.tab = activeTab;
       sup.workerId = dragWorkerId;
       dragWorkerId = null;
       renderActive();
@@ -2000,6 +1998,7 @@ function renderActive() {
           moveSubCrewTo(dragSubCrewId, sup.id, sub.id);
         } else if (!dragSubCrewId && dragWorkerId) {
           snapshotState();
+          detachWorkerFromCurrentSlot(dragWorkerId);
           const w = state.workers.find(x => x.id === dragWorkerId);
           if (w) { w.crewId = sub.id; w.tab = activeTab; }
           dragWorkerId = null;
@@ -2421,18 +2420,27 @@ function updateStats() {
   const hasSup   = state.crews.some(c => c.tab === tab && c.type === 'sup');
   const crews    = hasSup ? state.crews.filter(c => c.tab === tab && c.type === 'sup')
                           : state.crews.filter(c => c.tab === tab);
-  const workers  = isSchool ? (state.students||[]) : state.workers.filter(w => w.tab === tab);
+  // School holds two kinds of people: dedicated students (state.students) and
+  // any regular workers moved onto the school tab (state.workers with tab==='school',
+  // same as the pool renders at the bottom of renderSchool). Both must count.
+  const schoolWorkers = isSchool ? state.workers.filter(w => w.tab === 'school') : [];
+  const students      = isSchool ? (state.students||[]) : [];
+  const workers  = isSchool ? [...schoolWorkers, ...students] : state.workers.filter(w => w.tab === tab);
   // A worker sitting in a supervisor slot (state.crews[].workerId) has no crewId
   // but is not actually unassigned — exclude them the same way the pool does.
   const _supWorkerIds = new Set(state.crews.filter(c => c.workerId).map(c => c.workerId));
-  const unassigned = (isGrid||isSchool) ? 0 : workers.filter(w => !w.crewId && !_supWorkerIds.has(w.id)).length;
+  const unassigned = isGrid ? 0
+    : isSchool ? schoolWorkers.filter(w => !w.crewId && !_supWorkerIds.has(w.id)).length + students.filter(s => !s.sessionId).length
+    : workers.filter(w => !w.crewId && !_supWorkerIds.has(w.id)).length;
   document.getElementById('stat-crews').textContent     = isGrid ? '—' : crews.length;
   document.getElementById('stat-workers').textContent   = workers.length;
   document.getElementById('stat-unassigned').textContent = unassigned;
   document.getElementById('unassigned-badge').textContent = unassigned;
   Object.keys(TAB_CONFIG).forEach(t => {
     const el = document.getElementById('tc-'+t); if (!el) return;
-    el.textContent = t === 'school' ? (state.students||[]).length : state.workers.filter(w => w.tab === t).length;
+    el.textContent = t === 'school'
+      ? (state.students||[]).length + state.workers.filter(w => w.tab === 'school').length
+      : state.workers.filter(w => w.tab === t).length;
   });
 }
 
@@ -2458,6 +2466,7 @@ function onDrop(e, crewId) {
   }
   if (!dragWorkerId) return;
   snapshotState();
+  detachWorkerFromCurrentSlot(dragWorkerId);
   const w = state.workers.find(x => x.id === dragWorkerId);
   if (w) w.crewId = crewId === '__unassigned' ? null : crewId;
   renderActive();
