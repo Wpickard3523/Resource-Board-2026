@@ -206,6 +206,8 @@
   .training-pill.ttype-upcoming{border-style:dashed;opacity:.7}
   .card-training-add{background:none;border:none;color:var(--dim);font-size:10px;padding:1px 3px;cursor:pointer;margin-left:auto;line-height:1;flex-shrink:0}
   .card-training-add:hover{color:var(--orange)}
+  .card-training-add-highlight{color:#facc15;font-weight:700}
+  .card-training-add-highlight:hover{color:#fde047}
   /* TRAINING MATRIX POPOVER */
   .tm-popover{position:fixed;z-index:500;background:var(--panel);border:1px solid var(--border2);border-top:3px solid #2a7aff;width:420px;max-width:96vw;max-height:70vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.6);padding:0}
   .tm-pop-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:1}
@@ -462,9 +464,11 @@
   /* MINI CREW CALENDAR STRIP */
   .mini-cal{padding:4px 6px 5px;border-top:1px solid var(--border)}
   .mini-cal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:3px}
-  .mini-cal-label{font-family:'Barlow Condensed',sans-serif;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--dim)}
+  .mini-cal-label{font-family:'Barlow Condensed',sans-serif;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:1px}
   .mini-cal-btn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0 2px;line-height:1}
   .mini-cal-btn:hover{color:#6aa0ff}
+  .mini-cal-toggle{background:none;border:none;color:var(--dim);cursor:pointer;font-size:9px;padding:0 2px 0 0;line-height:1}
+  .mini-cal-toggle:hover{color:var(--text)}
   .mini-cal-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1px}
   .mini-cal-dow{font-family:'Barlow Condensed',sans-serif;font-size:8px;text-align:center;color:var(--dim);padding-bottom:1px}
   .mini-day{height:8px;border-radius:1px;cursor:pointer;position:relative}
@@ -2419,7 +2423,7 @@ function makeCard(w) {
     '</div>' +
     '<div class="card-training-bar" id="ctb-' + w.id + '">' +
       pillsHtml +
-      '<button class="card-training-add" title="Add training" onclick="event.stopPropagation();openTrainingModal(\'' + w.id + '\')">＋ Training</button>' +
+      '<button class="card-training-add card-training-add-highlight" title="Add training" onclick="event.stopPropagation();openTrainingModal(\'' + w.id + '\')">＋ Training</button>' +
       '<button class="card-training-add" title="View training matrix" onclick="event.stopPropagation();openTMPopover(\'' + w.id + '\',this)" style="color:#2a7aff">📋 Matrix</button>' +
       '<button class="card-training-add" title="Add vacation" onclick="event.stopPropagation();openCardVacModal(\'' + w.id + '\')" style="color:#10b981">🏖 Vacation</button>' +
     '</div>';
@@ -3803,6 +3807,24 @@ function fmtDateRange(start, end) {
 
 // ─── MINI CAL STRIP ─────────────────────────────────────────────────────────
 // Renders a 4-week Mon–Fri strip inside the sub-crew block
+// Every crew's 4-Week Outlook starts collapsed by default. _expandedMiniCals
+// tracks only the ones a person has explicitly opened, persisted across reloads.
+let _expandedMiniCals = new Set();
+try { _expandedMiniCals = new Set(JSON.parse(localStorage.getItem('vrd_expanded_minical')) || []); } catch(e) {}
+function _saveExpandedMiniCals() {
+  try { localStorage.setItem('vrd_expanded_minical', JSON.stringify([..._expandedMiniCals])); } catch(e) {}
+}
+function toggleMiniCal(crewId) {
+  const body = document.getElementById('mcb-' + crewId);
+  const btn  = document.getElementById('mct-' + crewId);
+  if (!body) return;
+  const wasExpanded = _expandedMiniCals.has(crewId);
+  if (wasExpanded) { _expandedMiniCals.delete(crewId); body.style.display = 'none'; }
+  else             { _expandedMiniCals.add(crewId);    body.style.display = ''; }
+  if (btn) { btn.textContent = wasExpanded ? '▸' : '▾'; btn.title = wasExpanded ? 'Show schedule' : 'Hide schedule'; }
+  _saveExpandedMiniCals();
+}
+
 function renderMiniCal(container, crewId, accent) {
   const today  = new Date(); today.setHours(0,0,0,0);
   const events = getCrewEvents(crewId);
@@ -3828,11 +3850,18 @@ function renderMiniCal(container, crewId, accent) {
     return null;
   }
 
+  const collapsed = !_expandedMiniCals.has(crewId);
+
   // Header row
   let html = '<div class="mini-cal-header" style="' + borderTop + ';padding-top:4px">' +
-    '<span class="mini-cal-label" style="' + (accent ? 'color:' + accent + 'cc' : '') + '">4-Week Outlook</span>' +
+    '<span class="mini-cal-label" style="' + (accent ? 'color:' + accent + 'cc' : '') + '">' +
+      '<button class="mini-cal-toggle" id="mct-' + crewId + '" title="' + (collapsed ? 'Show schedule' : 'Hide schedule') + '" onclick="toggleMiniCal(\'' + crewId + '\')">' + (collapsed ? '▸' : '▾') + '</button>' +
+      ' 4-Week Outlook' +
+    '</span>' +
     '<button class="mini-cal-btn" title="Open full schedule" onclick="openSchedModal(event,\'' + crewId + '\')">📅</button>' +
     '</div>';
+
+  html += '<div class="mini-cal-body" id="mcb-' + crewId + '" style="' + (collapsed ? 'display:none' : '') + '">';
 
   // DOW labels (Mon–Fri)
   html += '<div class="mini-cal-grid" style="margin-bottom:2px">';
@@ -3866,6 +3895,8 @@ function renderMiniCal(container, crewId, accent) {
     }
     html += '</div>';
   }
+
+  html += '</div>'; // close mini-cal-body
 
   container.innerHTML = html;
 }
