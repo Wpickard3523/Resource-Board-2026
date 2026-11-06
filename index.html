@@ -732,6 +732,7 @@ async function pinSubmit() {
     <span id="syncStatus" style="font-size:10px;font-family:'Barlow Condensed',sans-serif;color:var(--dim);letter-spacing:.5px;min-width:80px;display:inline-block"></span>
     <button class="btn btn-secondary" id="addWorkerBtn" onclick="handleAddWorker()">+ Worker</button>
     <button class="btn btn-primary" id="addCrewBtn" onclick="handleAddCrew()">+ Crew</button>
+    <button class="btn btn-ghost" id="fullscreenBtn" onclick="toggleFullscreen()" title="Toggle full screen">⛶ Full Screen</button>
   </div>
 </header>
 
@@ -1674,6 +1675,26 @@ function sortByRole(arr) {
     return a.name.localeCompare(b.name);
   });
 }
+
+// ─── FULL SCREEN ─────────────────────────────────────────────────────────────
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)
+      .call(document.documentElement)
+      .catch(err => alert('Could not enter full screen: ' + err.message));
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+}
+function _updateFullscreenBtn() {
+  const btn = document.getElementById('fullscreenBtn');
+  if (!btn) return;
+  const isFs = !!document.fullscreenElement;
+  btn.textContent = isFs ? '⛶ Exit Full Screen' : '⛶ Full Screen';
+  btn.title = isFs ? 'Exit full screen' : 'Enter full screen';
+}
+document.addEventListener('fullscreenchange', _updateFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', _updateFullscreenBtn);
 
 // ─── BOARD ZOOM ──────────────────────────────────────────────────────────────
 // Scales the board + unassigned pool together (shared parent .main-wrap) so
